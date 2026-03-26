@@ -26,6 +26,7 @@ git clone [https://github.com/Hunkak03/Dungeon-Terminal.git](https://github.com/
 cd Dungeon-Terminal
 g++ -o dungeon_game src/*.cpp -Iinclude
 ./dungeon_game
+```
 <a name="english"></a>
 
 🇺🇸 English
@@ -48,11 +49,12 @@ Paradigm: Object-Oriented Programming (OOP).
 Tools: G++ / CMake.
 
 💻 Installation & Execution
-Bash
+```Bash
 git clone [https://github.com/Hunkak03/Dungeon-Terminal.git](https://github.com/Hunkak03/Dungeon-Terminal.git)
 cd Dungeon-Terminal
 g++ -o dungeon_game src/*.cpp -Iinclude
 ./dungeon_game
+```
 👤 Author / Autor
 Developed by Hunkak03.
 
