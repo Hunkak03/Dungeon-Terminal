@@ -85,11 +85,17 @@ class Item:
     glyph: str = "?"
     color_key: str = "white"
 
+    # Potion heal amount as fraction of max HP (0.25 / 0.50 / 1.0). 0 = not a potion.
+    heal_pct: float = 0.0
+
     def is_weapon(self) -> bool:
         return self.slot == "weapon"
 
     def is_armor(self) -> bool:
         return self.slot == "armor"
+
+    def is_potion(self) -> bool:
+        return self.slot == "potion"
 
 
 @dataclass
@@ -529,6 +535,17 @@ RARITY_GLYPHS = {
 }
 
 COLOR_KEYS = ["white", "green", "cyan", "yellow", "magenta", "red"]
+
+
+def generate_potion(rng: random.Random) -> Item:
+    """Return a random health potion. Small is most common, Large is rarest."""
+    roll = rng.random()
+    if roll < 0.55:
+        return Item(name="Small Health Potion",  rarity="rare",      slot="potion", heal_pct=0.25, glyph="+", color_key="green")
+    elif roll < 0.85:
+        return Item(name="Medium Health Potion", rarity="epic",      slot="potion", heal_pct=0.50, glyph="+", color_key="cyan")
+    else:
+        return Item(name="Large Health Potion",  rarity="legendary", slot="potion", heal_pct=1.00, glyph="+", color_key="yellow")
 
 
 def generate_item(rng: random.Random, luck_points: int) -> Item:
@@ -994,8 +1011,9 @@ class RoguelikeGame:
         item_count = int(clamp(10 + self.floor * 0.20, 10, 24))
         item_count += self.rng.randint(0, 2)
 
-        # Enemies: more than loot (and scale with floor).
-        monster_spawn_count = int(clamp(item_count + 8 + self.floor * 0.15, 14, 44))
+        # Enemies: scale gently from early floors so the start isn't overwhelming.
+        # Floor 1 spawns ~7, reaching ~21 at floor 10 and capping at 44.
+        monster_spawn_count = int(clamp(4 + self.floor * 1.5 + item_count * 0.2, 5, 44))
 
         # Spread factor: distance between enemy spawns.
         min_dist_between_monsters = 2 if self.floor <= 15 else 2
@@ -1013,9 +1031,12 @@ class RoguelikeGame:
         # Items on ground (lower than enemy count).
         for _ in range(item_count):
             pos = self.map.random_floor_cell(avoid=self.player.pos())
-            # Floor loot is influenced by current luck.
             _, _, luck_points = self.total_player_stat_points()
-            item = generate_item(self.rng, luck_points=luck_points)
+            # ~10% chance a floor item is a potion instead of gear.
+            if self.rng.random() < 0.10:
+                item = generate_potion(self.rng)
+            else:
+                item = generate_item(self.rng, luck_points=luck_points)
             self.items_on_ground.append((pos, item))
 
         self.log(f"Floor {self.floor}/{self.max_floors}. Defeat the boss to reveal stairs.")
@@ -1029,6 +1050,13 @@ class RoguelikeGame:
         if not template.is_boss:
             hp_mult *= 1.10
             dmg_mult *= 0.70
+            # Extra damage nerf on early floors so the game isn't unfairly lethal at the start.
+            if self.floor == 1:
+                dmg_mult *= 0.50   # floor 1: enemies deal ~35% of their base damage
+            elif self.floor == 2:
+                dmg_mult *= 0.70   # floor 2: ~49%
+            elif self.floor == 3:
+                dmg_mult *= 0.85   # floor 3: ~60%
         return MonsterTemplate(
             key=template.key,
             name=template.name,
@@ -1361,10 +1389,14 @@ class RoguelikeGame:
         drop_roll = self.rng.random()
         if drop_roll < 0.8:
             _, _, luck_points = self.total_player_stat_points()
-            loot = generate_item(self.rng, luck_points=luck_points)
-            # Small chance to drop legendary more frequently for high luck.
-            if self.rng.random() < min(0.2, luck_points * 0.01) and loot.rarity != "legendary":
-                loot = generate_item_forced_rarity(self.rng, "legendary", luck_points=luck_points)
+            # ~8% chance the monster drops a potion instead of gear.
+            if self.rng.random() < 0.08:
+                loot = generate_potion(self.rng)
+            else:
+                loot = generate_item(self.rng, luck_points=luck_points)
+                # Small chance to drop legendary more frequently for high luck.
+                if self.rng.random() < min(0.2, luck_points * 0.01) and loot.rarity != "legendary":
+                    loot = generate_item_forced_rarity(self.rng, "legendary", luck_points=luck_points)
             self._place_item_near(m.pos(), loot)
 
         # Remove from board by setting hp = 0.
@@ -1423,9 +1455,9 @@ class RoguelikeGame:
         while self.xp >= self.xp_to_level:
             self.xp -= self.xp_to_level
             self.level += 1
-            self.upgrade_points += 1
+            self.upgrade_points += 4
             self.xp_to_level = int(self.xp_to_level * 1.18 + 10)
-            self.log(f"Level up! You are now level {self.level}. +1 stat point.")
+            self.log(f"Level up! You are now level {self.level}. +4 stat points.")
             # Apply passive stat from equipped items if they exist.
             self.update_player_hp()
             self.check_unlocks()
@@ -2105,32 +2137,50 @@ class RoguelikeGame:
             inv = list(self.inventory)
             equip_lines = []
             for i, it in enumerate(inv):
-                extra = []
-                if it.slot == "weapon":
-                    extra.append(f"dmg {it.base_damage}")
-                extra.append(f"+{it.strength_points} STR")
-                extra.append(f"+{it.resistance_points} RES")
-                extra.append(f"+{it.luck_points} LUCK")
-                boosters = ""
-                if it.boosters:
-                    boosters = f" | {len(it.boosters)} boosters"
-                equip_lines.append(f"{i+1}. {it.name} [{it.rarity}] ({' '.join(extra)}){boosters}")
+                if it.is_potion():
+                    equip_lines.append(f"{i+1}. {it.name} [{it.rarity}] (Heals {int(it.heal_pct*100)}% HP) [USE]")
+                else:
+                    extra = []
+                    if it.slot == "weapon":
+                        extra.append(f"dmg {it.base_damage}")
+                    extra.append(f"+{it.strength_points} STR")
+                    extra.append(f"+{it.resistance_points} RES")
+                    extra.append(f"+{it.luck_points} LUCK")
+                    boosters = ""
+                    if it.boosters:
+                        boosters = f" | {len(it.boosters)} boosters"
+                    equip_lines.append(f"{i+1}. {it.name} [{it.rarity}] ({' '.join(extra)}){boosters}")
 
             if not inv:
                 self.show_overlay("Inventory (I)", ["(empty)"], "Esc to close")
                 return
 
-            choice_idx = self.menu_select("Inventory (I): Equip with Enter", equip_lines, default_index=0)
+            choice_idx = self.menu_select("Inventory (I): Enter to equip/use", equip_lines, default_index=0)
             if choice_idx is None:
                 return
             it = inv[choice_idx]
-            # Confirm equip
+            if it.is_potion():
+                self._use_potion(it)
+                return
             ok = self.equip_item(it)
             if not ok:
                 continue
-            # After equipping, remove from inventory; equip_item already handles.
             self.update_player_hp()
             return
+
+    def _use_potion(self, item: Item) -> None:
+        assert self.player is not None
+        if item not in self.inventory:
+            return
+        heal_amount = int(round(self.max_hp() * item.heal_pct))
+        before = self.player.hp
+        self.player.hp = min(self.player.max_hp, self.player.hp + heal_amount)
+        healed = self.player.hp - before
+        self.inventory.remove(item)
+        self.log(f"Used {item.name}. Restored {healed} HP. ({self.player.hp}/{self.player.max_hp})")
+        self._sfx("loot")
+
+
 
     def open_stats_panel(self) -> None:
         while True:
@@ -2429,4 +2479,3 @@ if __name__ == "__main__":
         raise
 
     curses.wrapper(main)
-
