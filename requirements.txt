@@ -1,2 +1,5 @@
 windows-curses>=2.3
 pygame>=2.6
+
+# Ensure that the terminal ASCII graphics run on Windows
+# Pygame is used for handling audio assets
